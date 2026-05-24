@@ -2,6 +2,11 @@ import type { Context } from 'hono';
 import { chat as openaiChat, type ChatMessage } from '../utils/openai';
 import { readSTM, insertSTM, identifySTMOverflow } from '../memory/stm';
 import { queues } from '../queues';
+import { tryAcquireLock, releaseLock, chatLockKey } from '../utils/locks';
+
+// /chat lock TTL: longer than a slow LLM round-trip but short enough that
+// a crashed handler doesn't lock a user out forever.
+const CHAT_LOCK_TTL_MS = 30_000;
 
 export async function chat(c: Context) {
   const userId = c.get('userId') as string;
@@ -11,6 +16,18 @@ export async function chat(c: Context) {
     return c.json({ error: 'message (string) is required' }, 400);
   }
 
+  // Acquire per-user mutex so concurrent /chat requests from the same user
+  // serialize. Prevents STM/MTM state from being raced.
+  const lockKey = chatLockKey(userId);
+  const lockToken = await tryAcquireLock({ key: lockKey, ttlMs: CHAT_LOCK_TTL_MS });
+  if (!lockToken) {
+    return c.json(
+      { error: 'A previous chat for this user is still in progress' },
+      429,
+    );
+  }
+
+  try {
   // 1. Read STM (last up to 7 Q&A turns, oldest-first).
   const stm = await readSTM(userId);
 
@@ -61,4 +78,7 @@ export async function chat(c: Context) {
     stmSize: Math.min(stm.length + 1, 7),
     migratingPageIds: overflowIds,
   });
+  } finally {
+    await releaseLock(lockKey, lockToken);
+  }
 }

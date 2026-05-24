@@ -1,0 +1,1 @@
+ALTER TABLE "mtm_segments" ADD COLUMN "embedding" jsonb;

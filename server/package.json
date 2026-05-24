@@ -3,13 +3,15 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "worker:chain-summarize": "bun run src/scripts/workers/chain-summarize.ts",
-    "worker:stm-migrate":     "bun run src/scripts/workers/stm-migrate.ts",
-    "worker:segment-update":  "bun run src/scripts/workers/segment-update.ts",
-    "worker:heat-check":      "bun run src/scripts/workers/heat-check.ts",
-    "worker:mtm-evict":       "bun run src/scripts/workers/mtm-evict.ts",
-    "worker:lpm-promote":     "bun run src/scripts/workers/lpm-promote.ts"
+    "worker:stm-migrate": "bun run src/scripts/workers/stm-migrate.ts",
+    "worker:segment-update": "bun run src/scripts/workers/segment-update.ts",
+    "worker:heat-check": "bun run src/scripts/workers/heat-check.ts",
+    "worker:mtm-evict": "bun run src/scripts/workers/mtm-evict.ts",
+    "worker:lpm-promote": "bun run src/scripts/workers/lpm-promote.ts"
   },
   "dependencies": {
+    "@bull-board/api": "^7.1.5",
+    "@bull-board/hono": "^7.1.5",
     "@neondatabase/serverless": "^1.1.0",
     "@pinecone-database/pinecone": "^7.2.0",
     "bullmq": "^5.77.1",

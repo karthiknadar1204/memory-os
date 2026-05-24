@@ -15,6 +15,13 @@
       "when": 1779589602451,
       "tag": "0001_thankful_harpoon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1779596094452,
+      "tag": "0002_talented_retro_girl",
+      "breakpoints": true
     }
   ]
 }

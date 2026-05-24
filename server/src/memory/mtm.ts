@@ -29,6 +29,7 @@ export async function insertSegment(args: {
   userId: string;
   summary: string;
   keywords: string[];
+  embedding: number[];
 }): Promise<MTMSegment> {
   const [row] = await db
     .insert(mtmSegments)
@@ -36,12 +37,28 @@ export async function insertSegment(args: {
       userId: args.userId,
       summary: args.summary,
       keywords: args.keywords,
+      embedding: args.embedding,
       lInteraction: 1,           // we always insert with the first page in mind
       nVisit: 0,
       lastAccessTime: new Date(),
     })
     .returning();
   return row;
+}
+
+// List ALL segments for a user with their embeddings — used by stm-migrate
+// to do strongly-consistent F_score matching against Postgres state.
+export async function listSegmentsForMatching(userId: string): Promise<
+  Array<{ id: string; keywords: string[]; embedding: number[] | null }>
+> {
+  return db
+    .select({
+      id: mtmSegments.id,
+      keywords: mtmSegments.keywords,
+      embedding: mtmSegments.embedding,
+    })
+    .from(mtmSegments)
+    .where(eq(mtmSegments.userId, userId));
 }
 
 // Increment l_interaction (called when a new page joins) and refresh last_access_time.
@@ -92,10 +109,15 @@ export async function updateSegmentSummary(args: {
   segmentId: string;
   summary: string;
   keywords: string[];
+  embedding: number[];
 }): Promise<void> {
   await db
     .update(mtmSegments)
-    .set({ summary: args.summary, keywords: args.keywords })
+    .set({
+      summary: args.summary,
+      keywords: args.keywords,
+      embedding: args.embedding,
+    })
     .where(eq(mtmSegments.id, args.segmentId));
 }
 

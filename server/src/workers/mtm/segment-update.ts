@@ -18,7 +18,10 @@ const SYS_PROMPT = `You maintain a per-topic summary for a personal AI's memory.
 
 Given all Q&A pages in this segment, produce:
   - "summary": 1-3 concise sentences describing the topic/thread covered across all pages.
-  - "keywords": 5-15 lowercase content tokens (use stems/lemmas; underscores for compounds, e.g. "weight_loss"). Exclude stop words.
+  - "keywords": 8-15 lowercase content tokens.
+      * FIRST 3-5: BROAD topic anchors (single-word, generic enough that future related Q&As will share them — e.g., "running", "fitness").
+      * REST: specific compound tokens for precision (e.g., "warm_up", "pre_workout").
+      * Use stems/lemmas where natural. Exclude stop words.
 
 Return strict JSON: { "summary": string, "keywords": string[] }`;
 
@@ -72,15 +75,19 @@ ${pagesText}`;
         return { ok: true, skipped: true };
       }
 
-      // 4. Update Postgres.
+      // 4. Re-embed the new summary.
+      const summaryVector = await embed(newSummary);
+
+      // 5. Update Postgres (summary + keywords + embedding for ingestion matching).
       await updateSegmentSummary({
         segmentId,
         summary: newSummary,
         keywords: newKeywords,
+        embedding: summaryVector,
       });
 
-      // 5. Re-embed the new summary and upsert into Pinecone.
-      const summaryVector = await embed(newSummary);
+      // 6. Mirror to Pinecone mtm-segments namespace (used by retrieval Stage 1).
+      //    If this fails, retry will replay — Postgres already has the truth.
       await ns.mtmSegments().upsert({
         records: [
           {

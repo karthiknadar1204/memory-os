@@ -47,6 +47,10 @@ export const mtmSegments = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     summary: text('summary').notNull(),
     keywords: jsonb('keywords').$type<string[]>().notNull(),
+    // Embedding stored locally for strongly-consistent F_score matching during
+    // ingestion. Pinecone is eventually consistent and was creating duplicate
+    // segments when migrations ran in quick succession.
+    embedding: jsonb('embedding').$type<number[]>(),
     nVisit: integer('n_visit').default(0).notNull(),
     lInteraction: integer('l_interaction').default(0).notNull(),
     lastAccessTime: timestamp('last_access_time').defaultNow().notNull(),
