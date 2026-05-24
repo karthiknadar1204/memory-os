@@ -37,9 +37,10 @@ export async function insertSTM(
   return row;
 }
 
-// Enforce FIFO: if user has > STM_CAPACITY rows, delete the oldest excess.
-// Returns the ids deleted (so callers can later enqueue stm-migrate for them).
-export async function enforceSTMLimit(userId: string): Promise<string[]> {
+// Identify STM pages over the FIFO cap. Does NOT delete — the stm-migrate
+// worker deletes them after successfully writing the page to MTM. Returns the
+// oldest-first list of page ids that should be migrated.
+export async function identifySTMOverflow(userId: string): Promise<string[]> {
   const all = await db
     .select({ id: stmPages.id, timestamp: stmPages.timestamp })
     .from(stmPages)
@@ -47,13 +48,5 @@ export async function enforceSTMLimit(userId: string): Promise<string[]> {
     .orderBy(asc(stmPages.timestamp));
 
   if (all.length <= STM_CAPACITY) return [];
-
-  const excess = all.slice(0, all.length - STM_CAPACITY);
-  const idsToDelete = excess.map((r) => r.id);
-
-  for (const id of idsToDelete) {
-    await db.delete(stmPages).where(eq(stmPages.id, id));
-  }
-
-  return idsToDelete;
+  return all.slice(0, all.length - STM_CAPACITY).map((r) => r.id);
 }

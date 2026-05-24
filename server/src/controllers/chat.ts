@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import { chat as openaiChat, type ChatMessage } from '../utils/openai';
-import { readSTM, insertSTM, enforceSTMLimit } from '../memory/stm';
+import { readSTM, insertSTM, identifySTMOverflow } from '../memory/stm';
 import { queues } from '../queues';
 
 export async function chat(c: Context) {
@@ -31,23 +31,34 @@ export async function chat(c: Context) {
   // 3. Call OpenAI.
   const response = await openaiChat(messages);
 
-  // 4. Persist this Q&A as a new STM page, then enforce FIFO.
+  // 4. Persist this Q&A as a new STM page.
   const newPage = await insertSTM(userId, message, response);
-  const evicted = await enforceSTMLimit(userId);
 
-  // 5. Enqueue background work.
+  // 5. Identify overflow (NOT deleted yet — the stm-migrate worker deletes after migration).
+  const overflowIds = await identifySTMOverflow(userId);
+
+  // 6. Enqueue background work with deterministic jobIds so duplicates dedupe.
   //    - chain-summarize: always fires for the new page.
-  //    - stm-migrate: TODO — will be enqueued for each evicted page in a later phase.
-  await queues.chainSummarize.add('summarize', {
-    pageId: newPage.id,
-    userId,
-  });
+  //    - stm-migrate: one per overflow page id. Same pageId enqueued twice
+  //      (because overflow hasn't been deleted yet) is auto-deduped by jobId.
+  await queues.chainSummarize.add(
+    'summarize',
+    { pageId: newPage.id, userId },
+    { jobId: `summarize-${newPage.id}` },
+  );
+
+  for (const overflowPageId of overflowIds) {
+    await queues.stmMigrate.add(
+      'migrate',
+      { pageId: overflowPageId, userId },
+      { jobId: `migrate-${overflowPageId}` },
+    );
+  }
 
   return c.json({
     response,
     pageId: newPage.id,
     stmSize: Math.min(stm.length + 1, 7),
-    evictedPageIds: evicted,
+    migratingPageIds: overflowIds,
   });
 }
-
