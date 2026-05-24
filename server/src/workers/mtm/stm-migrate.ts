@@ -168,7 +168,10 @@ export function startStmMigrateWorker() {
         mtmPageId: mtmPage.id,
       };
     },
-    { connection, concurrency: 3 },
+    // concurrency = 1: prevents the race where two migrate jobs running in
+    // parallel each see an empty Pinecone result and both create a new segment.
+    // For multi-user scale, switch to per-user mutex (Redis SETNX).
+    { connection, concurrency: 1 },
   );
 
   worker.on('failed', (job, err) => {
