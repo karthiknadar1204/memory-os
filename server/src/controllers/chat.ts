@@ -1,8 +1,9 @@
 import type { Context } from 'hono';
-import { chat as openaiChat, type ChatMessage } from '../utils/openai';
-import { readSTM, insertSTM, identifySTMOverflow } from '../memory/stm';
+import { chat as openaiChat } from '../utils/openai';
+import { insertSTM, identifySTMOverflow } from '../memory/stm';
 import { queues } from '../queues';
 import { tryAcquireLock, releaseLock, chatLockKey } from '../utils/locks';
+import { retrieveAndBuildPrompt } from '../retrieval';
 
 // /chat lock TTL: longer than a slow LLM round-trip but short enough that
 // a crashed handler doesn't lock a user out forever.
@@ -16,7 +17,7 @@ export async function chat(c: Context) {
     return c.json({ error: 'message (string) is required' }, 400);
   }
 
-  // Acquire per-user mutex so concurrent /chat requests from the same user
+  // Acquire per-user mutex so concurrent /chat requests for the same user
   // serialize. Prevents STM/MTM state from being raced.
   const lockKey = chatLockKey(userId);
   const lockToken = await tryAcquireLock({ key: lockKey, ttlMs: CHAT_LOCK_TTL_MS });
@@ -28,56 +29,46 @@ export async function chat(c: Context) {
   }
 
   try {
-  // 1. Read STM (last up to 7 Q&A turns, oldest-first).
-  const stm = await readSTM(userId);
+    // 1. Retrieve memory across all 3 tiers + build the OpenAI prompt.
+    //    (Paper Sec 3.4 + 3.5 — F_Retrieval and Response Generation.)
+    const { messages, context } = await retrieveAndBuildPrompt({ userId, message });
 
-  // 2. Build the OpenAI message list: system prompt + prior turns + current query.
-  const messages: ChatMessage[] = [
-    {
-      role: 'system',
-      content:
-        'You are a helpful AI assistant with persistent memory across the conversation.',
-    },
-  ];
-  for (const page of stm) {
-    messages.push({ role: 'user', content: page.query });
-    messages.push({ role: 'assistant', content: page.response });
-  }
-  messages.push({ role: 'user', content: message });
+    // 2. Call OpenAI with the assembled prompt.
+    const response = await openaiChat(messages);
 
-  // 3. Call OpenAI.
-  const response = await openaiChat(messages);
+    // 3. Persist this Q&A as a new STM page.
+    const newPage = await insertSTM(userId, message, response);
 
-  // 4. Persist this Q&A as a new STM page.
-  const newPage = await insertSTM(userId, message, response);
+    // 4. Identify overflow (NOT deleted yet — stm-migrate handles deletion).
+    const overflowIds = await identifySTMOverflow(userId);
 
-  // 5. Identify overflow (NOT deleted yet — the stm-migrate worker deletes after migration).
-  const overflowIds = await identifySTMOverflow(userId);
-
-  // 6. Enqueue background work with deterministic jobIds so duplicates dedupe.
-  //    - chain-summarize: always fires for the new page.
-  //    - stm-migrate: one per overflow page id. Same pageId enqueued twice
-  //      (because overflow hasn't been deleted yet) is auto-deduped by jobId.
-  await queues.chainSummarize.add(
-    'summarize',
-    { pageId: newPage.id, userId },
-    { jobId: `summarize-${newPage.id}` },
-  );
-
-  for (const overflowPageId of overflowIds) {
-    await queues.stmMigrate.add(
-      'migrate',
-      { pageId: overflowPageId, userId },
-      { jobId: `migrate-${overflowPageId}` },
+    // 5. Enqueue background work with deterministic jobIds to dedupe.
+    await queues.chainSummarize.add(
+      'summarize',
+      { pageId: newPage.id, userId },
+      { jobId: `summarize-${newPage.id}` },
     );
-  }
 
-  return c.json({
-    response,
-    pageId: newPage.id,
-    stmSize: Math.min(stm.length + 1, 7),
-    migratingPageIds: overflowIds,
-  });
+    for (const overflowPageId of overflowIds) {
+      await queues.stmMigrate.add(
+        'migrate',
+        { pageId: overflowPageId, userId },
+        { jobId: `migrate-${overflowPageId}` },
+      );
+    }
+
+    return c.json({
+      response,
+      pageId: newPage.id,
+      stmSize: Math.min(context.stm.length + 1, 7),
+      migratingPageIds: overflowIds,
+      retrieved: {
+        mtmPageCount: context.mtm.pages.length,
+        mtmSegmentCount: context.mtm.segmentIds.length,
+        lpmKbCount: context.lpm.userKbFacts.length,
+        lpmAgentTraitsCount: context.lpm.agentTraitEntries.length,
+      },
+    });
   } finally {
     await releaseLock(lockKey, lockToken);
   }

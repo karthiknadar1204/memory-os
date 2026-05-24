@@ -72,6 +72,27 @@ export async function bumpSegmentOnJoin(segmentId: string): Promise<void> {
     .where(eq(mtmSegments.id, segmentId));
 }
 
+// Paper Sec 3.4 — after retrieval, bump n_visit + R_recency for retrieved segments.
+// We update many segments in a single SQL statement to avoid per-row roundtrips.
+export async function bumpSegmentsOnRetrieval(segmentIds: string[]): Promise<void> {
+  if (segmentIds.length === 0) return;
+  await db
+    .update(mtmSegments)
+    .set({
+      nVisit: sql`${mtmSegments.nVisit} + 1`,
+      lastAccessTime: new Date(),
+    })
+    .where(sql`${mtmSegments.id} IN ${segmentIds}`);
+}
+
+export async function listPagesByIds(ids: string[]) {
+  if (ids.length === 0) return [];
+  return db
+    .select()
+    .from(mtmPages)
+    .where(sql`${mtmPages.id} IN ${ids}`);
+}
+
 // Find the lowest-heat segment for a user (paper Sec 3.3: heat-based eviction).
 // Heat is computed on read via the same formula used in the heat-check worker:
 //   heat = n_visit + l_interaction + exp(-Δt / μ)   (μ = 1e+7 sec)
