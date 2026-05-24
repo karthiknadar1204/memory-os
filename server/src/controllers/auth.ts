@@ -2,7 +2,13 @@ import type { Context } from 'hono';
 import { eq } from 'drizzle-orm';
 import { sign } from 'hono/jwt';
 import { db } from '../config/db';
-import { users } from '../config/schema';
+import {
+  users,
+  userProfile,
+  agentProfile,
+  userTraits,
+} from '../config/schema';
+import { defaultTraits } from '../constants/traits';
 
 const JWT_SECRET = process.env.JWT_SECRET as string;
 
@@ -37,6 +43,20 @@ export async function signup(c: Context) {
     .insert(users)
     .values({ email, password: hash })
     .returning({ id: users.id, email: users.email });
+
+  // Initialize LPM default rows for this user (paper Sec 3.2 / 3.3).
+  await Promise.all([
+    db.insert(userProfile).values({ userId: user.id }),
+    db.insert(agentProfile).values({
+      userId: user.id,
+      role: 'Helpful personal AI assistant with persistent memory.',
+      character: 'Friendly, supportive, concise.',
+    }),
+    db.insert(userTraits).values({
+      userId: user.id,
+      traits: defaultTraits(),  // 90 dims, all 0
+    }),
+  ]);
 
   const token = await sign({ sub: user.id, email: user.email }, JWT_SECRET, 'HS256');
 
